@@ -1,0 +1,25 @@
+# Source and tests
+src/
+test/
+scripts/
+
+# Config files
+.github/
+.vscode/
+.history
+.gitignore
+.prettierrc
+.prettierignore
+.eslintrc.json
+eslint.config.mjs
+commitlint.config.js
+tsconfig.json
+tsconfig.build.json
+.releaserc.json
+
+# Logs and system files
+*.log
+.DS_Store
+
+# Dependencies
+node_modules/
