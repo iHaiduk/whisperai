@@ -7,7 +7,7 @@ Unofficial TypeScript SDK for [WhisperAI](https://whisperai.com/). This package 
 ## Installation
 
 ```bash
-npm install whisperai
+npm install whisperai-sdk
 ```
 
 ## Usage
@@ -17,7 +17,7 @@ npm install whisperai
 Initialize the client with your WhisperAI credentials.
 
 ```typescript
-import { WhisperClient } from 'whisperai';
+import { WhisperClient } from 'whisperai-sdk';
 
 const client = new WhisperClient({
   login: {
