@@ -1,6 +1,6 @@
 {
   "name": "whisperai",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "TypeScript SDK for WhisperAI: methods and interfaces for interacting with the service without external runtime dependencies.",
   "keywords": [
     "whisper",
