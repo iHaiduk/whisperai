@@ -3,4 +3,5 @@ dist/
 *.log
 npm-debug.log*
 .history
-./index.ts
+
+index.ts
