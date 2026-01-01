@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/iHaiduk/whisperai/compare/v1.0.0...v1.0.1) (2026-01-01)
+
+### Bug Fixes
+
+* **client:** update auth handling and cookie management ([08bd38f](https://github.com/iHaiduk/whisperai/commit/08bd38f78ffd1a3d2ad7a54de1cba3869ffd0998))
+
 ## 1.0.0 (2025-12-27)
 
 ### Features
