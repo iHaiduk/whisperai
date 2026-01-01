@@ -19,7 +19,7 @@ import type {
 import { WhisperApiError, WhisperAuthError, WhisperNetworkError } from "./errors.js"
 
 export class WhisperClient {
-  private cookies?: string
+  private cookies?: string[]
   private readonly clientOptions: Required<ClientOptions>
 
   constructor(clientOptions: ClientOptions) {
@@ -180,7 +180,8 @@ export class WhisperClient {
   private get requestOptions(): AxiosRequestConfig {
     return {
       headers: {
-        Cookie: this.cookies
+        "cache-control": "no-cache",
+        Cookie: this.cookies,
       }
     }
   }
@@ -191,12 +192,11 @@ export class WhisperClient {
 
       return await this.handleRequest(call())
     } catch (error: any) {
-      if (error.code !== "AUTH_ERROR") {
-        throw error
-      }
+      if (error.code !== "AUTH_ERROR") throw error
 
       await this.login()
       return this.handleRequest(call())
+
     }
   }
 
@@ -206,16 +206,15 @@ export class WhisperClient {
     try {
       const response = await request
 
-      this.cookies = (response.headers["set-cookie"] ?? []).join("; ")
+      this.cookies = response.headers["set-cookie"];
       return response.data
     } catch (err) {
-      console.log("err", err)
       if (axios.isAxiosError(err)) {
         if (!err.response) {
           throw new WhisperNetworkError(err)
         }
 
-        if (err.response.status === 401) {
+        if (err.response.status === 401 || err.response.status === 403) {
           throw new WhisperAuthError()
         }
 
