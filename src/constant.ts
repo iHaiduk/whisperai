@@ -7,3 +7,8 @@ export enum WhisperStatus {
   FAILED = "failed",
   CANCELLED = "cancelled"
 }
+
+export const DEFAULT_UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024
+export const DEFAULT_MAX_UPLOAD_ATTEMPTS = 5
+export const DEFAULT_POLL_INTERVAL_MS = 2_000
+export const DEFAULT_TRANSCRIPTION_TIMEOUT_MS = 30 * 60 * 1_000

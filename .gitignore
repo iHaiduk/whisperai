@@ -3,5 +3,6 @@ dist/
 *.log
 npm-debug.log*
 .history
+.DS_Store
 
 index.ts

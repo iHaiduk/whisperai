@@ -1,6 +1,6 @@
 {
   "name": "whisperai-sdk",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "description": "TypeScript SDK for WhisperAI: methods and interfaces for interacting with the service without external runtime dependencies.",
   "keywords": [
     "whisper",
@@ -37,6 +37,7 @@
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "clean": "rm -rf dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
     "release": "semantic-release"
   },
   "dependencies": {},

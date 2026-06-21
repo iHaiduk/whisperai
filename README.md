@@ -1,8 +1,8 @@
 # whisperai-sdk
 
-Unofficial TypeScript SDK for [WhisperAI](https://whisperai.com/). This package provides methods and interfaces for interacting with the WhisperAI service without external runtime dependencies (except axios).
+Unofficial TypeScript SDK for [WhisperAI](https://whisperai.com/). Version 2 uses WhisperAI's signed Google Cloud Storage resumable-upload flow and requires Node.js 22 or newer.
 
-**Disclaimer:** This is an unofficial implementation and is not affiliated with WhisperAI.
+> This project is not affiliated with WhisperAI.
 
 ## Installation
 
@@ -10,152 +10,126 @@ Unofficial TypeScript SDK for [WhisperAI](https://whisperai.com/). This package 
 npm install whisperai-sdk
 ```
 
-## Usage
+## Transcribe a file
 
-### Initialization
-
-Initialize the client with your WhisperAI credentials.
+`transcribe()` performs the complete operation: authentication, upload, retries, finalization, status polling, and fetching the completed transcription.
 
 ```typescript
-import { WhisperClient } from 'whisperai-sdk';
+import { readFile } from "node:fs/promises"
+import { WhisperClient } from "whisperai-sdk"
 
 const client = new WhisperClient({
   login: {
-    email: "your-email@example.com",
-    password: "your-password"
-  },
-  // Optional: Override default settings
-  // whisperUrl: "https://whisperai.com",
-  // chunkSize: 8 * 1024 * 1024 // 8MB
-});
-```
-
-The client handles authentication automatically. It will log in on the first request and refresh the session if the token expires.
-
-### Methods
-
-#### User & Account
-
-Get current user information, usage statistics, and subscription details.
-
-```typescript
-// Get user info
-const userInfo = await client.user();
-console.log(`User: ${userInfo.firstName} ${userInfo.lastName}`);
-
-// Get usage stats
-const usage = await client.usage();
-console.log(`Monthly Usage: ${usage.monthlyUsageMinutes} minutes`);
-
-// Get subscription details
-const subscription = await client.subscriptionDetails();
-```
-
-#### Uploading Audio
-
-Upload audio files for transcription. The `upload` method handles file chunking automatically.
-
-```typescript
-import fs from 'fs';
-
-// Read file buffer
-const buffer = fs.readFileSync('./interview.mp3');
-
-// Upload
-const result = await client.upload(buffer, {
-  filename: 'interview.mp3',
-  durationSeconds: 120, // Total duration in seconds
-  mimeType: 'audio/mpeg', // Optional
-  title: 'Interview with John Doe', // Optional
-  enableSpeakerDetection: true, // Optional
-  speakerCount: 'auto' // Optional: 'auto' or number
-});
-
-console.log(`Uploaded recording ID: ${result.id}`);
-```
-
-#### Transcription
-
-Manage transcriptions for uploaded recordings.
-
-```typescript
-const recordingId = 12345;
-
-// Start/Request transcription
-const transcriptionJob = await client.transcription(recordingId);
-
-// Check recording status and get transcription result
-const recording = await client.recording(recordingId);
-
-if (recording.status === 'completed' && recording.transcription) {
-  console.log(recording.transcription.content);
-  
-  // Access segments with timestamps
-  recording.transcription.segments.forEach(segment => {
-    console.log(`[${segment.start} - ${segment.end}]: ${segment.text}`);
-  });
-}
-```
-
-#### Translation
-
-Translate a recording to another language.
-
-```typescript
-const recordingId = 12345;
-
-// Translate to Spanish
-const translation = await client.translate(recordingId, 'es');
-```
-
-#### Recordings Management
-
-List and retrieve recordings.
-
-```typescript
-// Get a specific recording by ID
-const recording = await client.recording(recordingId);
-
-// List recordings (paginated)
-const recordingsList = await client.recordings({
-  limit: 10,
-  page: 1,
-  // search: "interview", // Optional search query
-  // status: "completed"  // Optional status filter
-});
-
-console.log(`Found ${recordingsList.meta.totalItems} recordings`);
-```
-
-#### Analytics
-
-Get a summary of your activity.
-
-```typescript
-const summary = await client.summary();
-console.log(`Total recordings: ${summary.recordings.total}`);
-```
-
-## Error Handling
-
-The SDK throws specific errors for different failure scenarios.
-
-```typescript
-import { WhisperAuthError, WhisperNetworkError, WhisperApiError } from 'whisperai-sdk/errors';
-
-try {
-  await client.user();
-} catch (error) {
-  if (error instanceof WhisperAuthError) {
-    console.error("Authentication failed. Check credentials.");
-  } else if (error instanceof WhisperNetworkError) {
-    console.error("Network issue.");
-  } else if (error instanceof WhisperApiError) {
-    console.error(`API Error ${error.status}: ${JSON.stringify(error.data)}`);
-  } else {
-    console.error("Unknown error:", error);
+    email: process.env.WHISPER_EMAIL!,
+    password: process.env.WHISPER_PASSWORD!
   }
-}
+})
+
+const audio = new Uint8Array(await readFile("./interview.m4a"))
+const recording = await client.transcribe(audio, {
+  filename: "interview.m4a",
+  mimeType: "audio/x-m4a",
+  durationSeconds: 120
+})
+
+console.log(recording.transcription.content)
+```
+
+The default processing timeout is 30 minutes and the default polling interval is 2 seconds.
+
+```typescript
+const controller = new AbortController()
+
+const recording = await client.transcribe(audio, metadata, {
+  timeoutMs: 45 * 60 * 1000,
+  pollIntervalMs: 3000,
+  signal: controller.signal,
+  onProgress: percentage => console.log(`Upload: ${percentage}%`)
+})
+```
+
+## Streams
+
+For streaming uploads, provide `totalSize` so the SDK can upload without buffering the entire file. If it is omitted, the stream is buffered first to determine its size.
+
+```typescript
+const recording = await client.transcribe(stream, {
+  filename: "meeting.webm",
+  mimeType: "audio/webm",
+  durationSeconds: 900,
+  totalSize: contentLength
+})
+```
+
+## Start without waiting
+
+Queue workers can upload and return immediately, then check the recording later.
+
+```typescript
+const started = await client.startTranscription(audio, metadata)
+console.log(started.id, started.status) // processing
+
+const statuses = await client.recordingStatus([started.id])
+const completed = await client.waitForTranscription(started.id)
+```
+
+`requestTranscription(recordingId)` is available for explicitly restarting or recovering an existing recording. A normal signed upload starts processing when the upload is completed, so it does not need this extra call.
+
+## Upload metadata
+
+The SDK accepts the current WhisperAI transcription settings:
+
+```typescript
+await client.transcribe(audio, {
+  filename: "interview.m4a",
+  durationSeconds: 120,
+  language: "multi-auto",
+  enableSpeakerDetection: true,
+  speakerCount: "auto",
+  transcriptionStyle: "clean_readable",
+  importantTerms: "WhisperAI, Codex",
+  customPrompt: "Technical product interview",
+  speakerIdentificationEnabled: true,
+  speakerIdentificationMode: "role",
+  speakerIdentificationValues: ["Interviewer", "Guest"]
+})
+```
+
+## Other methods
+
+```typescript
+await client.user()
+await client.usage()
+await client.subscriptionDetails()
+await client.recording(recordingId)
+await client.recordings({ limit: 20, sort: "newest" })
+await client.summary()
+await client.translate(recordingId, "es")
+```
+
+## Errors
+
+```typescript
+import {
+  WhisperApiError,
+  WhisperAuthError,
+  WhisperNetworkError,
+  WhisperTimeoutError,
+  WhisperTranscriptionError,
+  WhisperUploadError
+} from "whisperai-sdk"
+```
+
+Upload diagnostics are enabled by default and sent best-effort to WhisperAI. Disable them globally with `diagnostics: false` in `ClientOptions`, or per operation with `{ diagnostics: false }`.
+
+## Live smoke test
+
+```bash
+WHISPER_EMAIL=... \
+WHISPER_PASSWORD=... \
+WHISPER_AUDIO_PATH=./sample.m4a \
+WHISPER_AUDIO_DURATION_SECONDS=10 \
+bun test test/live.test.ts
 ```
 
 ## License

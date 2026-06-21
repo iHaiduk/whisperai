@@ -34,3 +34,38 @@ export class WhisperNetworkError extends WhisperError {
     this.cause = cause
   }
 }
+
+export class WhisperUploadError extends WhisperError {
+  readonly code = "UPLOAD_ERROR"
+
+  constructor(
+    message: string,
+    public readonly diagnosticId?: string,
+    cause?: unknown
+  ) {
+    super(message)
+    this.cause = cause
+  }
+}
+
+export class WhisperTranscriptionError extends WhisperError {
+  readonly code = "TRANSCRIPTION_ERROR"
+
+  constructor(
+    public readonly recordingId: number,
+    public readonly status: string
+  ) {
+    super(`Transcription ${recordingId} finished with status ${status}`)
+  }
+}
+
+export class WhisperTimeoutError extends WhisperError {
+  readonly code = "TIMEOUT_ERROR"
+
+  constructor(
+    public readonly recordingId: number,
+    public readonly timeoutMs: number
+  ) {
+    super(`Transcription ${recordingId} did not complete within ${timeoutMs}ms`)
+  }
+}
