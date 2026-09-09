@@ -1,3 +1,13 @@
+## [2.1.0](https://github.com/iHaiduk/whisperai/compare/v2.0.0...v2.1.0) (2026-09-09)
+
+### Features
+
+* improve GCS upload resilience, type declarations, and AI docs ([c15b27f](https://github.com/iHaiduk/whisperai/commit/c15b27fe3d4cb91ef74dfa0efc77b098ce04d478))
+
+### Bug Fixes
+
+* **ci:** align conventionalcommits preset with semantic-release ([44322d1](https://github.com/iHaiduk/whisperai/commit/44322d1f26beb8e7bf56d2553ac70e62e9b16548))
+
 ## 2.0.0 (2026-06-21)
 
 ### Breaking changes
