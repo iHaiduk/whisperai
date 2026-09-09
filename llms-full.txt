@@ -1,0 +1,366 @@
+# whisperai-sdk — Complete LLM Reference & Integration Guide
+
+> Comprehensive integration guide and type specification for `whisperai-sdk` (v2.0.0).
+> Designed for AI coding assistants (Cursor, GitHub Copilot, Claude, ChatGPT, Antigravity, Aider) and backend engineers.
+
+---
+
+## 1. System Architecture & Request Lifecycle
+
+WhisperAI v2 operates a signed Google Cloud Storage (GCS) resumable upload pipeline:
+
+```
++---------------+              +---------------+              +-------------------+
+| WhisperClient |              | WhisperAI API |              | Google Cloud (GCS)|
++---------------+              +---------------+              +-------------------+
+        |                              |                                |
+        | 1. POST /auth/login (lazy)   |                                |
+        |----------------------------->|                                |
+        |<-----------------------------| (cookies: connect.sid)         |
+        |                              |                                |
+        | 2. POST /uploads/sign        |                                |
+        |----------------------------->|                                |
+        |<-----------------------------| (signedResumableInitUrl, id)   |
+        |                              |                                |
+        | 3. POST signedResumableInitUrl                                |
+        |-------------------------------------------------------------->|
+        |<--------------------------------------------------------------| (201, Location: sessionUrl)
+        |                              |                                |
+        | 4. PUT sessionUrl (chunks)                                    |
+        |-------------------------------------------------------------->|
+        |<--------------------------------------------------------------| (308 Resume Incomplete / 200/201)
+        |                              |                                |
+        | 5. POST /uploads/:id/complete|                                |
+        |----------------------------->|                                |
+        |<-----------------------------| (RecordingResponse, status: processing)
+        |                              |                                |
+        | 6. GET /recordings/status    |                                |
+        |----------------------------->|                                |
+        |<-----------------------------| (status: processing -> completed)
+        |                              |                                |
+        | 7. GET /recordings/:id       |                                |
+        |----------------------------->|                                |
+        |<-----------------------------| (CompletedRecordingResponse)   |
+```
+
+### Self-Healing & Resilience
+- **Auth Recovery**: If any API endpoint returns HTTP 401, `recall()` automatically triggers `login()` and replays the original request. Concurrent callers share a single in-flight `loginPromise`.
+- **Transient GCS Failures**: If a chunk PUT fails with network error, HTTP 408, 429, or 5xx, the SDK probes GCS with `PUT bytes */totalSize` to determine the committed offset, updates the cursor, applies exponential backoff with jitter, and resumes without restarting the entire file.
+- **Upload Cancellation / Abandonment**: On terminal failure, the client notifies WhisperAI via `POST /uploads/:id/abandon` with the reason (`session-open-failed`, `put-non-retriable`, `put-retries-exhausted`) to free cloud resources.
+
+---
+
+## 2. Complete Type Definitions
+
+```typescript
+export type AudioInput = Uint8Array | ReadableStream<Uint8Array>
+
+export interface ClientOptions {
+  /** Credentials for WhisperAI dashboard authentication */
+  login: {
+    email: string
+    password: string
+  }
+  /** API Base URL (defaults to "https://whisperai.com") */
+  whisperUrl?: string
+  /** Chunk size in bytes for GCS upload parts. Must be multiple of 256 KiB. Default: 8388608 (8 MiB) */
+  chunkSize?: number
+  /** Max retry attempts per chunk on transient network/5xx errors. Default: 8 */
+  maxUploadAttempts?: number
+  /** Initial retry backoff in ms. Default: 1000 */
+  initialRetryDelayMs?: number
+  /** Max retry backoff in ms. Default: 30000 */
+  maxRetryDelayMs?: number
+  /** Enable diagnostic breadcrumbs sent to WhisperAI. Default: true */
+  diagnostics?: boolean
+  /** Polling interval in ms for waitForTranscription. Default: 2000 (2s) */
+  pollIntervalMs?: number
+  /** Total timeout in ms for waitForTranscription. Default: 1800000 (30m) */
+  transcriptionTimeoutMs?: number
+  /** Request timeout in ms for individual HTTP and GCS calls. Default: 120000 (2m) */
+  requestTimeoutMs?: number
+}
+
+export interface OperationOptions {
+  /** AbortSignal to cancel in-flight uploads or polling */
+  signal?: AbortSignal
+  /** Upload progress callback (percentage: 0 to 100) */
+  onProgress?: (percentage: number) => void
+  /** Correlation ID for tracing diagnostics. Defaults to auto-generated 8-char ID */
+  diagnosticId?: string
+  /** Override diagnostics sending for this call */
+  diagnostics?: boolean
+}
+
+export interface TranscribeOptions extends OperationOptions {
+  /** Polling interval in ms. Default: 2000 */
+  pollIntervalMs?: number
+  /** Maximum wait duration in ms before timing out. Default: 1800000 (30m) */
+  timeoutMs?: number
+}
+
+export type TranscriptionStyle = "standard" | "clean_readable" | (string & {})
+export type SpeakerIdentificationMode = "role" | "name" | (string & {})
+
+export interface InitMetaFile {
+  /** Audio filename including extension (e.g. "meeting.m4a") */
+  filename: string
+  /** Audio duration in seconds (must be positive) */
+  durationSeconds: number
+  /** Optional title for the recording (defaults to filename without extension) */
+  title?: string
+  /** Audio MIME type (e.g. "audio/x-m4a", "audio/wav", "audio/webm") */
+  mimeType?: string
+  /** Total byte size. Required for ReadableStream to avoid in-memory buffering */
+  totalSize?: number
+  /** ISO language code or "auto" / "multi-auto". Default: "auto" */
+  language?: string
+  /** Enable speaker diarization. Default: false */
+  enableSpeakerDetection?: boolean
+  /** Number of speakers: "auto" or integer count. Default: "auto" */
+  speakerCount?: "auto" | number
+  /** Transcription format: "standard" or "clean_readable". Default: "standard" */
+  transcriptionStyle?: TranscriptionStyle
+  /** Custom vocabulary or terms to improve recognition */
+  importantTerms?: string
+  /** System prompt guiding transcription */
+  customPrompt?: string
+  /** Enable labeled speaker identification. Default: false */
+  speakerIdentificationEnabled?: boolean
+  /** Speaker identification mode: "role" or "name". Default: "role" */
+  speakerIdentificationMode?: SpeakerIdentificationMode
+  /** Predefined speaker names or roles */
+  speakerIdentificationValues?: string[]
+  /** Optional folder ID in WhisperAI */
+  folderId?: number
+}
+
+export interface TranscriptionSegment {
+  id: number
+  start: number
+  end: number
+  text: string
+}
+
+export interface Translation {
+  id: number
+  transcriptionId: number
+  targetLanguage: string
+  content: string
+  status: string
+  createdAt: string
+}
+
+export interface Transcription {
+  id: number
+  userId: number
+  recordingId: number
+  content: string
+  editedContent: string | null
+  confidence: number
+  segments: TranscriptionSegment[]
+  translations: Translation[]
+  timestamps: {
+    words: unknown[]
+    duration: number
+    language: string
+    segments: TranscriptionSegment[]
+  }
+  speakers: unknown | null
+  speakerNames: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+  summary: unknown | null
+}
+
+export interface RecordingResponse {
+  id: number
+  userId: number
+  title: string
+  originalFilename: string
+  fileExtension: string
+  mimeType: string
+  audioUrl: string
+  duration: number
+  language: string
+  status: "queued" | "processing" | "completed" | "failed" | "canceled" | "retry_pending" | "retry_processing"
+  speakerDetectionEnabled: boolean
+  speakerCount: number | null
+  totalChunks: number | null
+  uploadSessionId: string
+  createdAt: string
+  updatedAt: string
+  transcription: Transcription | null
+}
+
+export interface CompletedRecordingResponse extends RecordingResponse {
+  status: "completed"
+  transcription: Transcription
+}
+
+export type FinalizeUploadResponse = RecordingResponse
+```
+
+---
+
+## 3. Error Classes Hierarchy
+
+```
+WhisperError (abstract, has code: string, diagnosticId?: string)
+├── WhisperAuthError           (code: "AUTH_ERROR") — 401 Unauthorized, invalid credentials
+├── WhisperApiError            (code: "API_ERROR", status: number, response: unknown) — Non-2xx API responses
+├── WhisperNetworkError        (code: "NETWORK_ERROR", cause?: unknown) — DNS / connection failure
+├── WhisperUploadError         (code: "UPLOAD_ERROR", diagnosticId?: string, cause?: unknown) — GCS stream or upload failure
+├── WhisperTimeoutError        (code: "TIMEOUT_ERROR", recordingId: number, timeoutMs: number) — Polling exceeded limit
+└── WhisperTranscriptionError  (code: "TRANSCRIPTION_ERROR", recordingId: number, status: string) — WhisperAI failed processing
+```
+
+---
+
+## 4. End-to-End Recipes
+
+### Recipe A: NestJS Service Integration
+
+```typescript
+import { Injectable, OnModuleInit } from "@nestjs/common"
+import { ConfigService } from "@nestjs/config"
+import { WhisperClient, CompletedRecordingResponse } from "whisperai-sdk"
+
+@Injectable()
+export class WhisperService implements OnModuleInit {
+  private client!: WhisperClient
+
+  constructor(private readonly config: ConfigService) {}
+
+  onModuleInit() {
+    this.client = new WhisperClient({
+      login: {
+        email: this.config.getOrThrow<string>("WHISPER_EMAIL"),
+        password: this.config.getOrThrow<string>("WHISPER_PASSWORD")
+      },
+      chunkSize: 8 * 1024 * 1024,
+      diagnostics: true
+    })
+  }
+
+  async transcribeAudio(
+    fileBuffer: Buffer,
+    filename: string,
+    durationSeconds: number,
+    language = "auto"
+  ): Promise<CompletedRecordingResponse> {
+    return this.client.transcribe(
+      new Uint8Array(fileBuffer),
+      {
+        filename,
+        durationSeconds,
+        language,
+        enableSpeakerDetection: true
+      },
+      {
+        timeoutMs: 15 * 60 * 1000 // 15 minutes
+      }
+    )
+  }
+}
+```
+
+### Recipe B: Express / Fastify Upload Endpoint
+
+```typescript
+import express from "express"
+import multer from "multer"
+import { WhisperClient } from "whisperai-sdk"
+
+const app = express()
+const upload = multer({ storage: multer.memoryStorage() })
+const client = new WhisperClient({
+  login: { email: process.env.WHISPER_EMAIL!, password: process.env.WHISPER_PASSWORD! }
+})
+
+app.post("/api/transcribe", upload.single("audio"), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "Missing audio file" })
+    const duration = parseFloat(req.body.durationSeconds) || 60
+
+    const result = await client.transcribe(new Uint8Array(req.file.buffer), {
+      filename: req.file.originalname,
+      durationSeconds: duration,
+      mimeType: req.file.mimetype
+    })
+
+    res.json({
+      recordingId: result.id,
+      text: result.transcription.content,
+      segments: result.transcription.segments
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+```
+
+### Recipe C: Streaming from S3 or Remote URL
+
+```typescript
+import { WhisperClient } from "whisperai-sdk"
+
+async function transcribeFromUrl(client: WhisperClient, audioUrl: string, durationSeconds: number) {
+  const headResponse = await fetch(audioUrl, { method: "HEAD" })
+  const contentLength = Number(headResponse.headers.get("content-length"))
+
+  const audioResponse = await fetch(audioUrl)
+  if (!audioResponse.body) throw new Error("No response body")
+
+  return client.transcribe(audioResponse.body, {
+    filename: "downloaded.mp3",
+    durationSeconds,
+    totalSize: contentLength, // Prevents in-memory buffering!
+    mimeType: headResponse.headers.get("content-type") ?? "audio/mpeg"
+  })
+}
+```
+
+### Recipe D: Background Worker with Status Tracking
+
+```typescript
+import { WhisperClient, WhisperStatus } from "whisperai-sdk"
+
+// Step 1: Upload worker job
+async function startUploadJob(client: WhisperClient, audio: Uint8Array, filename: string, duration: number) {
+  const started = await client.startTranscription(audio, {
+    filename,
+    durationSeconds: duration
+  })
+  return started.id // Store in your database with status = "processing"
+}
+
+// Step 2: Scheduled polling cron / job
+async function pollPendingRecordings(client: WhisperClient, pendingIds: number[]) {
+  if (pendingIds.length === 0) return
+
+  const statuses = await client.recordingStatus(pendingIds)
+  for (const item of statuses) {
+    if (item.recordingStatus === WhisperStatus.COMPLETED) {
+      const recording = await client.recording(item.recordingId)
+      console.log(`Recording ${item.recordingId} completed:`, recording.transcription?.content)
+    } else if (item.recordingStatus === WhisperStatus.FAILED) {
+      console.error(`Recording ${item.recordingId} failed`)
+    }
+  }
+}
+```
+
+---
+
+## 5. Diagnostics & Troubleshooting
+
+- **Upload Diagnostics**: If `diagnostics: true` (default), the client sends diagnostic breadcrumbs to `/api/v2/diagnostics/upload-breadcrumb`. Each operation gets an 8-character hex correlation ID (`context.diagnosticId`). If an upload fails, `WhisperUploadError.diagnosticId` contains this correlation ID to match logs with WhisperAI support.
+- **Budget Guard**: When testing in CI/CD, always inspect `client.usage()`:
+  ```typescript
+  const usage = await client.usage()
+  const remainingMinutes = usage.limits.monthlyMinutes - usage.monthlyUsageMinutes
+  if (remainingMinutes < 3) {
+    throw new Error("Insufficient monthly WhisperAI minutes for test")
+  }
+  ```

@@ -35,7 +35,7 @@ const recording = await client.transcribe(audio, {
 console.log(recording.transcription.content)
 ```
 
-The default processing timeout is 30 minutes and the default polling interval is 2 seconds.
+The default processing timeout is 30 minutes (`transcriptionTimeoutMs`) and the default polling interval is 2 seconds (`pollIntervalMs`). Individual HTTP and GCS requests default to a 120-second timeout (`requestTimeoutMs: 120_000`), configurable in `ClientOptions`.
 
 ```typescript
 const controller = new AbortController()
@@ -77,7 +77,9 @@ const completed = await client.waitForTranscription(started.id)
 
 ## Upload metadata
 
-The SDK accepts the current WhisperAI transcription settings:
+The SDK accepts the current WhisperAI transcription settings. When omitted, `language` defaults to `"auto"` and `transcriptionStyle` defaults to `"standard"` (matching the web dashboard defaults; previously `"multi-auto"` and `"clean_readable"`). Resumable upload retry attempts default to 8 (`DEFAULT_MAX_UPLOAD_ATTEMPTS`).
+
+Explicit settings can still be passed:
 
 ```typescript
 await client.transcribe(audio, {
@@ -122,13 +124,23 @@ import {
 
 Upload diagnostics are enabled by default and sent best-effort to WhisperAI. Disable them globally with `diagnostics: false` in `ClientOptions`, or per operation with `{ diagnostics: false }`.
 
+## AI Coding Assistants & LLMs
+
+This package includes a standardized [`llms.txt`](./llms.txt) and [`llms-full.txt`](./llms-full.txt) specification. When integrating this package in another project, you can provide `@node_modules/whisperai-sdk/llms.txt` or `@node_modules/whisperai-sdk/llms-full.txt` as context to AI tools (Cursor, GitHub Copilot, Claude, ChatGPT, Windsurf, Antigravity) so they immediately understand all methods, types, recipes, and error handling without guessing.
+
+Additionally, TypeScript declaration maps (`.d.ts.map`) and rich JSDoc documentation are built-in, enabling IDEs to jump directly to definitions and display full documentation on hover.
+
 ## Live smoke test
+
+By default, the live smoke test is skipped. To run it against real credentials, specify `WHISPER_LIVE_UPLOAD=1`. A budget guard ensures at least 3 minutes of usage reserve remain before proceeding.
 
 ```bash
 WHISPER_EMAIL=... \
 WHISPER_PASSWORD=... \
 WHISPER_AUDIO_PATH=./sample.m4a \
 WHISPER_AUDIO_DURATION_SECONDS=10 \
+WHISPER_AUDIO_MIME_TYPE=audio/mp4 \
+WHISPER_LIVE_UPLOAD=1 \
 bun test test/live.test.ts
 ```
 

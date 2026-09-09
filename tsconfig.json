@@ -1,12 +1,12 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "nodenext",
     "moduleResolution": "NodeNext",
 
     "declaration": true,
     "emitDeclarationOnly": true,
-    "declarationMap": false,
+    "declarationMap": true,
 
     "outDir": "dist",
     "rootDir": "src",

@@ -1,0 +1,223 @@
+# whisperai-sdk
+
+> TypeScript SDK for WhisperAI (https://whisperai.com) implementing direct signed Google Cloud Storage (GCS) resumable uploads, automatic session recovery, status polling, and account management. Requires Node.js >= 22 or Bun. Zero external runtime dependencies.
+
+## Key Capabilities
+
+- **One-shot transcription**: `client.transcribe(audio, meta, options)` handles auth, signed GCS upload, status polling, and returns completed text with timestamps and speaker diarization.
+- **Asynchronous / Queue workflow**: `client.startTranscription(...)` uploads audio and returns recording ID immediately; `client.waitForTranscription(id)` or `client.recordingStatus([id])` checks or waits later.
+- **Streaming uploads**: Accepts `ReadableStream<Uint8Array>` directly without buffering when `meta.totalSize` is provided.
+- **Resumable uploads**: Direct chunked upload to GCS (default 8 MiB parts) with automatic offset probing and exponential backoff on network/5xx failures.
+- **Zero-friction authentication**: Automatic re-login on HTTP 401, concurrent `login()` call deduplication, cookie session management.
+
+## Installation
+
+```bash
+npm install whisperai-sdk
+# or
+bun add whisperai-sdk
+# or
+pnpm add whisperai-sdk
+```
+
+## Quickstart
+
+```typescript
+import { readFile } from "node:fs/promises"
+import { WhisperClient } from "whisperai-sdk"
+
+const client = new WhisperClient({
+  login: {
+    email: process.env.WHISPER_EMAIL!,
+    password: process.env.WHISPER_PASSWORD!
+  }
+})
+
+// Transcribe an audio file
+const audio = new Uint8Array(await readFile("./interview.m4a"))
+const result = await client.transcribe(audio, {
+  filename: "interview.m4a",
+  durationSeconds: 120,
+  mimeType: "audio/x-m4a",
+  language: "auto",
+  enableSpeakerDetection: true
+})
+
+console.log(result.transcription.content)
+```
+
+## Core API Reference
+
+### `new WhisperClient(options: ClientOptions)`
+Initializes the SDK client.
+- `login: { email, password }` (**required**): Account credentials.
+- `chunkSize` (number, default: `8_388_608` / 8 MiB): GCS upload chunk size.
+- `maxUploadAttempts` (number, default: `8`): Max retries per chunk.
+- `pollIntervalMs` (number, default: `2000` / 2s): Polling interval in `waitForTranscription`.
+- `transcriptionTimeoutMs` (number, default: `1_800_000` / 30m): Max time to wait for transcription.
+- `requestTimeoutMs` (number, default: `120_000` / 2m): Timeout per individual HTTP/GCS request.
+- `diagnostics` (boolean, default: `true`): Send anonymous upload breadcrumbs to WhisperAI.
+
+### Transcription Methods
+
+| Method | Parameters | Returns | Description |
+|---|---|---|---|
+| `transcribe` | `(file: AudioInput, meta: InitMetaFile, options?: TranscribeOptions)` | `Promise<CompletedRecordingResponse>` | Complete pipeline: upload, poll, and return completed transcript. |
+| `startTranscription` | `(file: AudioInput, meta: InitMetaFile, options?: OperationOptions)` | `Promise<FinalizeUploadResponse>` | Uploads audio to GCS and finalizes; returns immediately (`status: "processing"`). |
+| `waitForTranscription` | `(recordingId: number, options?: TranscribeOptions)` | `Promise<CompletedRecordingResponse>` | Polls until transcription is completed, canceled, or failed. |
+| `requestTranscription` | `(recordingId: number, signal?: AbortSignal)` | `Promise<TranscriptionResponse>` | Kicks off transcription processing on an already-uploaded recording. |
+| `recordingStatus` | `(recordingIds: number[], signal?: AbortSignal)` | `Promise<RecordingStatusResponse[]>` | Batch queries status of recordings (`processing`, `completed`, `failed`). |
+
+### Management & Analytics Methods
+
+| Method | Parameters | Returns | Description |
+|---|---|---|---|
+| `login` | `(signal?: AbortSignal)` | `Promise<UserInfo>` | Authenticates explicitly (deduplicated across concurrent calls). |
+| `user` | `()` | `Promise<UserInfo>` | Retrieves current user profile. |
+| `usage` | `()` | `Promise<UsageInfo>` | Retrieves monthly consumed minutes and plan quotas. |
+| `subscriptionDetails` | `()` | `Promise<SubscriptionDetailsResponse>` | Retrieves billing, plan status, and trial state. |
+| `recording` | `(recordingId: number, signal?: AbortSignal)` | `Promise<RecordingResponse>` | Fetches recording metadata and transcript by ID. |
+| `recordings` | `(query?: RecordingsQuery)` | `Promise<RecordingsResponse>` | Fetches paginated recordings list. |
+| `translate` | `(recordingId: number, language: string)` | `Promise<TranslateResponse>` | Translates transcription into target ISO language code. |
+| `summary` | `()` | `Promise<SummaryResponse>` | Retrieves account activity and analytics. |
+
+## Common Integration Patterns
+
+### 1. Web Framework (Express / NestJS / Fastify) File Upload
+```typescript
+import { WhisperClient } from "whisperai-sdk"
+
+const whisper = new WhisperClient({
+  login: { email: process.env.WHISPER_EMAIL!, password: process.env.WHISPER_PASSWORD! }
+})
+
+// In your controller or route handler:
+async function handleUpload(buffer: Buffer, originalname: string, durationSeconds: number) {
+  const recording = await whisper.transcribe(
+    new Uint8Array(buffer),
+    {
+      filename: originalname,
+      durationSeconds: Math.ceil(durationSeconds),
+      mimeType: "audio/mp4",
+      enableSpeakerDetection: true
+    },
+    {
+      onProgress: (pct) => console.log(`Uploading: ${pct}%`)
+    }
+  )
+
+  return {
+    id: recording.id,
+    text: recording.transcription.content,
+    speakers: recording.transcription.speakers,
+    segments: recording.transcription.segments
+  }
+}
+```
+
+### 2. Stream Upload Without Buffering
+To upload large files without loading them into memory, pass a `ReadableStream<Uint8Array>` and provide `totalSize`:
+```typescript
+import { createReadStream, statSync } from "node:fs"
+import { Readable } from "node:stream"
+
+const stats = statSync("large-meeting.wav")
+const nodeStream = createReadStream("large-meeting.wav")
+const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>
+
+const result = await client.transcribe(webStream, {
+  filename: "large-meeting.wav",
+  durationSeconds: 3600,
+  totalSize: stats.size, // Required for unbuffered streaming!
+  mimeType: "audio/wav"
+})
+```
+
+### 3. Background Job / Queue Worker Pattern (BullMQ / Celery / SQS)
+```typescript
+// Producer / Upload Job:
+async function uploadJob(audio: Uint8Array, filename: string, duration: number) {
+  const started = await client.startTranscription(audio, {
+    filename,
+    durationSeconds: duration
+  })
+  // Enqueue check job with recordingId
+  await queue.add("check-transcription", { recordingId: started.id })
+}
+
+// Consumer / Poller Job:
+async function checkJob(recordingId: number) {
+  const [status] = await client.recordingStatus([recordingId])
+  if (status?.recordingStatus === "completed") {
+    const recording = await client.recording(recordingId)
+    await saveTranscription(recording.transcription!.content)
+  } else if (status?.recordingStatus === "failed") {
+    throw new Error(`Transcription failed for ${recordingId}`)
+  } else {
+    // Retry polling later
+    await queue.add("check-transcription", { recordingId }, { delay: 5000 })
+  }
+}
+```
+
+### 4. Cancellation with `AbortController`
+```typescript
+const controller = new AbortController()
+
+// Cancel if taking too long or user requested cancel
+setTimeout(() => controller.abort(new Error("User canceled upload")), 30000)
+
+try {
+  await client.transcribe(audio, metadata, { signal: controller.signal })
+} catch (error) {
+  if (controller.signal.aborted) {
+    console.log("Operation aborted cleanly")
+  }
+}
+```
+
+## Error Handling
+
+All SDK errors inherit from `WhisperError`:
+
+```typescript
+import {
+  WhisperError,
+  WhisperAuthError,
+  WhisperApiError,
+  WhisperUploadError,
+  WhisperTimeoutError,
+  WhisperTranscriptionError,
+  WhisperNetworkError
+} from "whisperai-sdk"
+
+try {
+  const result = await client.transcribe(audio, metadata)
+} catch (error) {
+  if (error instanceof WhisperAuthError) {
+    // Invalid email or password
+  } else if (error instanceof WhisperTimeoutError) {
+    // Exceeded timeoutMs; recordingId is error.recordingId
+    console.log(`Timed out waiting for recording ${error.recordingId}`)
+  } else if (error instanceof WhisperTranscriptionError) {
+    // WhisperAI marked recording as "failed" or "canceled"
+    console.log(`Failed with status ${error.status} (id: ${error.recordingId})`)
+  } else if (error instanceof WhisperUploadError) {
+    // GCS session failed or upload was rejected; correlation ID: error.diagnosticId
+    console.log(`Upload error diag: ${error.diagnosticId}`)
+  } else if (error instanceof WhisperApiError) {
+    // HTTP status error: error.status, error.response
+    console.log(`API HTTP ${error.status}`)
+  } else if (error instanceof WhisperNetworkError) {
+    // Connection failure / DNS error
+  }
+}
+```
+
+## Important Integration Notes for AI Agents
+
+1. **`durationSeconds` is required**: WhisperAI init requests require an exact or approximate audio duration in seconds.
+2. **`totalSize` for streams**: When passing a `ReadableStream<Uint8Array>`, always provide `meta.totalSize`. If omitted, the SDK must buffer the entire stream into memory to determine size before initiating GCS resumable upload.
+3. **Chunk Size**: GCS resumable uploads require chunk sizes that are multiples of 256 KiB (`262,144` bytes). The SDK defaults to 8 MiB (`8,388,608` bytes).
+4. **No need to call `login()` manually**: `WhisperClient` logs in lazily on the first API call and automatically handles 401 re-authentication. Calling `client.login()` is optional.
+5. **No need to call `requestTranscription()` after upload**: `startTranscription` and `transcribe` automatically finalize and kick off processing on the WhisperAI backend. `requestTranscription` is only for re-triggering existing recordings.
